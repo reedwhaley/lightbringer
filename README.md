@@ -205,7 +205,7 @@ Use this for `mpcgr` team races.
 
 ### Example
 
-`/match create_cgc category:mpcgr subcategory:"CGC Tournament" team1:"Team Alpha" team2:"Team Beta" team1_player1_user:@A team1_player2_user:@B team2_player1_user:@C team2_player2_user:@D start_local:"2026-04-19 1900" timezone_name:CT match_name:"CGC Quarterfinal 1"`
+`/match create_cgc category:mpcgr subcategory:"CGC Tournament" team1:"Team Orange" team2:"Team Green" team1_player1_user:@A team1_player2_user:@B team2_player1_user:@C team2_player2_user:@D start_local:"2026-04-19 1900" timezone_name:CT match_name:"CGC Quarterfinal 1"`
 
 ---
 
