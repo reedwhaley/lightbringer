@@ -478,7 +478,7 @@ The bot opens the Racetime room 30 minutes before the race start.
 
 ## Seed prompt timing
 
-The bot prompts for seed handling at T minus 20.
+The bot prompts for seed handling at 20 minutes before the race starts if no seed has been submitted.
 
 ## Organizer reminder timing
 
@@ -495,7 +495,7 @@ If the match is unclaimed:
 
 ## CGC password DM timing
 
-For CGC matches, team room credentials are DMd to the correct players at the correct time once they are stored.
+For CGC matches, team room credentials are DMd to the correct players at the correct time (T-20 from match start) once they are stored.
 
 ## Racetime room state syncing
 
@@ -599,7 +599,6 @@ This includes updates after:
 3. Room opens automatically
 4. Organizer sets seed with `/match set_seed`
 5. If SpeedGaming assigns a restream, set it with `/match speedgaming`
-6. Complete the match with `/match complete`
 
 ### CGC match
 
@@ -608,8 +607,7 @@ This includes updates after:
 3. Room opens automatically
 4. Organizer sets both team room names and passwords with `/match password`
 5. Organizer sets the seed with `/match set_seed`
-6. If needed, set the restream with `/match speedgaming`
-7. Complete the match with `/match complete`
+6. If SpeedGaming assigns a restream, set it with `/match speedgaming`
 
 ### Organizer no-show recovery
 
