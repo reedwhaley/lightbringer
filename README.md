@@ -13,6 +13,7 @@ It handles:
 - Daily tournament briefing posts
 - SpeedGaming restream link updates
 - Match completion and cancellation cleanup
+- Archive posting for completed and cancelled matches
 
 ## What the bot does
 
@@ -41,6 +42,7 @@ Tournament features include:
 - Tournament reminder behavior
 - Daily tournament briefing posts
 - Ranked Racetime rooms
+- Archive posting for completed and cancelled matches
 
 ### Weekly matches
 
@@ -54,6 +56,24 @@ Weekly features include:
 - Ranked Racetime rooms
 
 ## Permissions
+
+### Tournament participants
+
+Tournament participants can:
+
+- Create or schedule tournament matches
+- Create or schedule tournament CGC matches
+- Cancel matches they are participating in
+
+Tournament participants cannot:
+
+- Claim matches
+- Manage organizer ownership
+- Take over or unclaim matches from the claim card
+- Set seeds
+- Set SpeedGaming links
+- Update match details unless they are also the assigned organizer or an admin
+- Complete matches unless they are also the assigned organizer or an admin
 
 ### Tournament organizers
 
@@ -85,17 +105,11 @@ Weekly organizers can:
 
 Admins can do everything.
 
-### Participants
+This includes:
 
-Participants can:
-
-- Cancel their own matches
-
-Participants cannot:
-
-- Claim matches
-- Manage organizer ownership
-- Take over or unclaim matches from the claim card
+- Discord users with the Discord Administrator permission
+- Tournament Admin role
+- Server Admin role
 
 ## Time entry format
 
@@ -121,6 +135,13 @@ Create a standard 1v1 match.
 ### Use when
 
 Use this for normal tournament or weekly races in `mpr` or `mp2r`.
+
+### Who can use it
+
+- Tournament participants for tournament matches
+- Tournament organizers for tournament matches
+- Weekly organizers for weekly matches
+- Admins
 
 ### Required fields
 
@@ -156,6 +177,13 @@ Create a CGC team match.
 ### Use when
 
 Use this for `mpcgr` team races.
+
+### Who can use it
+
+- Tournament participants for tournament matches
+- Tournament organizers for tournament matches
+- Weekly organizers for weekly matches
+- Admins
 
 ### Required fields
 
@@ -334,6 +362,7 @@ Set the SpeedGaming or restream Twitch URL for a match.
 - Updates the Google Calendar event
 - Updates the Discord scheduled event
 - Adds the `Restream:` line in the Discord event description
+- Uses the SpeedGaming link as the Discord event location when present
 - Can be used even if you are not the assigned organizer, as long as you have organizer access for that match type
 
 ### Example
@@ -386,8 +415,9 @@ Mark a match complete.
 ### What it does
 
 - Marks the match complete
-- Updates the claim card
 - Deletes the Discord scheduled event
+- Posts a plain text archive summary into the completed matches thread
+- Deletes the original claim box from the claim channel
 - Cleans up runtime reminder messages
 
 ### Example
@@ -411,7 +441,8 @@ Cancel a match.
 - Cancels the match
 - Deletes the Google Calendar event
 - Deletes the Discord scheduled event
-- Updates the claim card
+- Posts a plain text archive summary into the cancelled matches thread
+- Deletes the original claim box from the claim channel
 - Cleans up runtime reminder messages
 - Posts a notice to the correct reminder channel
 
@@ -479,8 +510,16 @@ Handled states include:
 If Racetime cancels the room:
 - The bot cancels the local match
 - Removes calendar and event data
-- Updates the claim card
+- Posts an archive summary
+- Deletes the claim box
 - Posts a notice for staff
+
+If Racetime finishes the room:
+- The bot completes the local match
+- Removes the Discord scheduled event
+- Posts an archive summary
+- Deletes the claim box
+- Cleans up runtime messages
 
 ## Daily tournament briefing
 
@@ -505,6 +544,33 @@ The bot posts a tournament briefing each day at 10:00 AM Central.
 or
 
 `Match Label || <local time> || **UNCLAIMED**`
+
+## Archive threads
+
+Completed and cancelled matches are archived into dedicated threads.
+
+### Completed matches thread
+
+Used for plain text summaries of completed matches.
+
+### Cancelled matches thread
+
+Used for plain text summaries of cancelled matches.
+
+### Archive summary format
+
+Each archive post includes:
+
+- Match ID
+- Match name
+- Final state
+- Event category and subcategory
+- Claimed organizer as plain text
+- Start time
+- Racetime link
+- Restream link if present
+
+The archive summary does not ping the organizer.
 
 ## Google Calendar and Discord events
 
@@ -588,6 +654,7 @@ Check:
 
 - The match has the correct `match_name`
 - The SpeedGaming link is set if you want a restream shown
+- The event location uses the SpeedGaming link first when present
 
 ## Notes on naming
 
@@ -601,6 +668,7 @@ Use this for the actual public-facing match title you want shown in:
 - Discord scheduled events
 - lists
 - daily briefing posts
+- archive summaries
 
 ### `notes`
 
