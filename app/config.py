@@ -35,10 +35,18 @@ class Settings:
     fallback_role_id: int
     allowed_role_ids: list[int]
 
+    tournament_participant_role_id: int
+    tournament_admin_role_id: int
+    server_admin_role_id: int
+
     weekly_reminder_channel_id: int
     weekly_room_open_channel_id: int
     weekly_allowed_role_ids: list[int]
     weekly_ping_role_ids: dict[str, int]
+
+    completed_matches_thread_id: int
+    cancelled_matches_thread_id: int
+    lightbringer_logs_thread_id: int
 
     default_timezone: str
     database_url: str
@@ -100,6 +108,9 @@ def get_settings() -> Settings:
         player_alert_channel_id=int(_required("PLAYER_ALERT_CHANNEL_ID")),
         fallback_role_id=int(_required("FALLBACK_ROLE_ID")),
         allowed_role_ids=_parse_role_list("ALLOWED_ROLE_IDS"),
+        tournament_participant_role_id=int(_required("TOURNAMENT_PARTICIPANT_ROLE_ID")),
+        tournament_admin_role_id=int(_required("TOURNAMENT_ADMIN_ROLE_ID")),
+        server_admin_role_id=int(_required("SERVER_ADMIN_ROLE_ID")),
         weekly_reminder_channel_id=int(_required("WEEKLY_REMINDER_CHANNEL_ID")),
         weekly_room_open_channel_id=int(_required("WEEKLY_ROOM_OPEN_CHANNEL_ID")),
         weekly_allowed_role_ids=_parse_role_list("WEEKLY_ALLOWED_ROLE_IDS"),
@@ -108,6 +119,9 @@ def get_settings() -> Settings:
             "mp2r": int(_required("WEEKLY_MP2R_ROLE_ID")),
             "mpcgr": int(_required("WEEKLY_MPCGR_ROLE_ID")),
         },
+        completed_matches_thread_id=int(_required("COMPLETED_MATCHES_THREAD_ID")),
+        cancelled_matches_thread_id=int(_required("CANCELLED_MATCHES_THREAD_ID")),
+        lightbringer_logs_thread_id=int(_required("LIGHTBRINGER_LOGS_THREAD_ID")),
         default_timezone=os.getenv("DEFAULT_TIMEZONE", "America/New_York").strip(),
         database_url=os.getenv("DATABASE_URL", "sqlite:///lightbringer.db").strip(),
         google_client_id=_required("GOOGLE_CLIENT_ID"),

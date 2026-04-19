@@ -53,6 +53,18 @@ class SchedulerJobs:
     def _briefing_label(self, match: Match) -> str:
         return match.stream_name or f"{match.team1} vs {match.team2}"
 
+    def _archive_thread_id(self, terminal_state: str) -> int:
+        if terminal_state == "complete":
+            return int(self.settings.completed_matches_thread_id)
+        return int(self.settings.cancelled_matches_thread_id)
+
+    def _assigned_archive_text(self, match: Match) -> str:
+        if getattr(match, "assigned_display_name", None):
+            return match.assigned_display_name
+        if getattr(match, "assigned_discord_id", None):
+            return str(match.assigned_discord_id)
+        return "Unclaimed"
+
     def _local_start_text(self, match: Match) -> str:
         return discord_timestamp(match.start_at_utc, "t")
 
@@ -151,6 +163,9 @@ class SchedulerJobs:
             logger.warning("Failed to send message to channel %s: %s", channel_id, exc)
             return None
 
+    async def _log_notice(self, message: str) -> discord.Message | None:
+        return await self._safe_send(int(self.settings.lightbringer_logs_thread_id), message)
+
     async def _delete_discord_message(self, channel_id: str | int, message_id: str | int) -> bool:
         try:
             channel = await self._resolve_channel(int(channel_id))
@@ -227,6 +242,42 @@ class SchedulerJobs:
         except Exception as exc:
             logger.warning("Failed to delete Discord scheduled event for %s: %s", match.id, exc)
 
+    async def _archive_terminal_match(self, match: Match, terminal_state: str) -> None:
+        thread = await self._resolve_channel(self._archive_thread_id(terminal_state))
+        if thread is None or not isinstance(thread, discord.abc.Messageable):
+            return
+
+        lines = [
+            f"{match.id} | {self._briefing_label(match)}",
+            f"State: {terminal_state.title()}",
+            f"Event: {match.category_slug} / {match.subcategory}",
+            f"Claimed By: {self._assigned_archive_text(match)}",
+            f"Start: {discord_timestamp(match.start_at_utc)}",
+            f"Racetime: {match.racetime_room_url or 'Pending'}",
+        ]
+        if getattr(match, "speedgaming_url", None):
+            lines.append(f"Restream: {match.speedgaming_url}")
+
+        try:
+            await thread.send("\n".join(lines))
+        except Exception as exc:
+            logger.warning("Failed to archive terminal match %s: %s", match.id, exc)
+
+    async def _delete_claim_box_message(self, match: Match) -> None:
+        channel_id = getattr(match, "claim_channel_id", None)
+        message_id = getattr(match, "claim_message_id", None)
+
+        if channel_id and message_id:
+            try:
+                await self._delete_discord_message(channel_id, message_id)
+            except Exception:
+                pass
+
+        try:
+            self.match_service.clear_claim_message(match.id)
+        except Exception:
+            pass
+
     async def _send_cgc_team_passwords(self, match: Match) -> None:
         if str(match.category_slug).lower() != "mpcgr" or self._is_weekly(match.subcategory):
             return
@@ -268,8 +319,7 @@ class SchedulerJobs:
                 )
                 sent = await self._safe_dm_user(user_id, dm_text)
                 if not sent:
-                    await self._safe_send(
-                        self.settings.admin_channel_id,
+                    await self._log_notice(
                         f"Failed to DM {team_key} player <@{user_id}> for `{self._match_label(match)}`."
                     )
 
@@ -290,7 +340,8 @@ class SchedulerJobs:
         if not updated:
             return
 
-        await self._refresh_claim_message(updated)
+        await self._archive_terminal_match(updated, "cancelled")
+        await self._delete_claim_box_message(updated)
         await self._delete_runtime_messages_for_terminal_state(session, match.id)
 
         notice_lines = [
@@ -360,7 +411,7 @@ class SchedulerJobs:
             for match in todays_matches:
                 start_dt = match.start_at_utc
                 if start_dt.tzinfo is None:
-                    start_dt = start_dt.replace(tzinfo=ZoneInfo('UTC'))
+                    start_dt = start_dt.replace(tzinfo=ZoneInfo("UTC"))
                 start_ts = int(start_dt.timestamp())
                 lines.append(
                     f"{self._briefing_label(match)} || <t:{start_ts}:t> || {self._briefing_claim_text(match)}"
@@ -430,13 +481,6 @@ class SchedulerJobs:
                     await self._upsert_discord_event(match)
                     await self._refresh_claim_message(match)
 
-                    admin_msg = await self._safe_send(
-                        self.settings.admin_channel_id,
-                        f"Opened racetime room for `{self._match_label(match)}`: {room_url}",
-                    )
-                    if admin_msg:
-                        self.reminders.track_message(session, match.id, "admin_room_open", admin_msg.channel.id, admin_msg.id)
-
                     if self._is_weekly(match.subcategory):
                         ping_role_id = self._weekly_ping_role_for_match(match)
                         if ping_role_id:
@@ -470,9 +514,8 @@ class SchedulerJobs:
                             self.reminders.mark_sent(session, match.id, player_alert_key)
                 except Exception as exc:
                     logger.exception("Failed to open room for match %s", match.id)
-                    await self._safe_send(
-                        self.settings.admin_channel_id,
-                        f"Failed to open room for `{self._match_label(match)}`: {exc}",
+                    await self._log_notice(
+                        f"Failed to open room for `{self._match_label(match)}`: {exc}"
                     )
 
     async def send_due_seed_prompts(self) -> None:
@@ -513,21 +556,8 @@ class SchedulerJobs:
                     await self._refresh_claim_message(match)
 
                 else:
-                    reminder_key = "seed_prompt_ready"
                     room_update_key = "seed_room_info_ready"
                     cgc_password_dm_key = "cgc_password_dm_ready"
-
-                    if not self.reminders.already_sent(session, match.id, reminder_key):
-                        if match.assigned_discord_id:
-                            message = f"<@{match.assigned_discord_id}> seed is ready for `{match_label}`."
-                        else:
-                            message = f"<@&{fallback_role_id}> seed is ready for `{match_label}`."
-
-                        sent_msg = await self._safe_send(reminder_channel_id, message)
-                        if sent_msg:
-                            self.reminders.track_message(session, match.id, "seed_prompt_ready", sent_msg.channel.id, sent_msg.id)
-
-                        self.reminders.mark_sent(session, match.id, reminder_key)
 
                     if not self.reminders.already_sent(session, match.id, room_update_key):
                         try:
@@ -535,6 +565,9 @@ class SchedulerJobs:
                             self.reminders.mark_sent(session, match.id, room_update_key)
                         except Exception as exc:
                             logger.exception("Failed to update racetime room info for %s: %s", match.id, exc)
+                            await self._log_notice(
+                                f"Failed to update racetime room info for `{self._match_label(match)}`: {exc}"
+                            )
 
                     if str(match.category_slug).lower() == "mpcgr" and not self._is_weekly(match.subcategory):
                         if not self.reminders.already_sent(session, match.id, cgc_password_dm_key):
@@ -543,6 +576,9 @@ class SchedulerJobs:
                                 self.reminders.mark_sent(session, match.id, cgc_password_dm_key)
                             except Exception as exc:
                                 logger.exception("Failed CGC password DMs for %s: %s", match.id, exc)
+                                await self._log_notice(
+                                    f"Failed CGC password DMs for `{self._match_label(match)}`: {exc}"
+                                )
 
                     self.calendar_service.upsert_match_event(match)
                     await self._upsert_discord_event(match)
@@ -621,7 +657,8 @@ class SchedulerJobs:
                         if updated:
                             self.calendar_service.upsert_match_event(updated)
                             await self._delete_discord_event(updated)
-                            await self._refresh_claim_message(updated)
+                            await self._archive_terminal_match(updated, "complete")
+                            await self._delete_claim_box_message(updated)
                             await self._delete_runtime_messages_for_terminal_state(session, match.id)
                             logger.info("Auto-completed %s from racetime state sync", match.id)
 
@@ -630,3 +667,6 @@ class SchedulerJobs:
 
                 except Exception as exc:
                     logger.exception("Failed to sync racetime state for %s: %s", match.id, exc)
+                    await self._log_notice(
+                        f"Failed to sync racetime state for `{self._match_label(match)}`: {exc}"
+                    )

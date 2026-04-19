@@ -60,6 +60,16 @@ def _user_has_role(member: discord.Member, role_ids: list[int]) -> bool:
     return bool(set(role_ids).intersection(user_role_ids))
 
 
+def _is_bot_admin_member(member: discord.Member) -> bool:
+    settings = _settings()
+    admin_role_ids = {
+        settings.tournament_admin_role_id,
+        settings.server_admin_role_id,
+    }
+    user_role_ids = {role.id for role in member.roles}
+    return bool(admin_role_ids.intersection(user_role_ids))
+
+
 def _is_admin(interaction: discord.Interaction) -> bool:
     try:
         if interaction.permissions and interaction.permissions.administrator:
@@ -70,9 +80,11 @@ def _is_admin(interaction: discord.Interaction) -> bool:
     member = interaction.user
     if isinstance(member, discord.Member):
         try:
-            return bool(member.guild_permissions.administrator)
+            if member.guild_permissions.administrator:
+                return True
         except Exception:
-            return False
+            pass
+        return _is_bot_admin_member(member)
     return False
 
 

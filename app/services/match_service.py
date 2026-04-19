@@ -293,3 +293,14 @@ class MatchService:
             session.flush()
             session.refresh(match)
             return match
+
+    def clear_claim_message(self, match_id: str) -> Match | None:
+        with session_scope() as session:
+            match = session.get(Match, match_id)
+            if not match:
+                return None
+            match.claim_channel_id = None
+            match.claim_message_id = None
+            session.flush()
+            session.refresh(match)
+            return match

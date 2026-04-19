@@ -58,6 +58,9 @@ class MatchCommands(app_commands.Group):
     def _is_weekly(self, subcategory: str | None) -> bool:
         return "weekly" in str(subcategory or "").lower()
 
+    def _is_tournament(self, subcategory: str | None) -> bool:
+        return "tournament" in str(subcategory or "").lower()
+
     def _match_selector_label(self, match) -> str:
         title = match.stream_name or (
             match.team1 if self._is_weekly(match.subcategory) else f"{match.team1} vs {match.team2}"
@@ -74,6 +77,13 @@ class MatchCommands(app_commands.Group):
             return f"<@{match.assigned_discord_id}>"
         return "Unassigned"
 
+    def _assigned_archive_text(self, match) -> str:
+        if getattr(match, "assigned_display_name", None):
+            return match.assigned_display_name
+        if getattr(match, "assigned_discord_id", None):
+            return str(match.assigned_discord_id)
+        return "Unclaimed"
+
     def _claim_channel_id_for_subcategory(self, subcategory: str | None) -> int:
         if self._is_weekly(subcategory):
             return int(self.settings.weekly_reminder_channel_id)
@@ -81,6 +91,19 @@ class MatchCommands(app_commands.Group):
 
     def _compose_seed_value(self, permalink: str, seed_hash: str) -> str:
         return f"{permalink.strip()} || {seed_hash.strip()}"
+
+    def _archive_thread_id(self, terminal_state: str) -> int:
+        if terminal_state == "complete":
+            return int(self.settings.completed_matches_thread_id)
+        return int(self.settings.cancelled_matches_thread_id)
+
+    def _is_bot_admin_member(self, member: discord.Member) -> bool:
+        admin_role_ids = {
+            self.settings.tournament_admin_role_id,
+            self.settings.server_admin_role_id,
+        }
+        user_role_ids = {role.id for role in member.roles}
+        return bool(admin_role_ids.intersection(user_role_ids))
 
     async def _upsert_discord_event(self, match) -> None:
         try:
@@ -117,6 +140,60 @@ class MatchCommands(app_commands.Group):
         except Exception:
             return None
 
+    async def _resolve_channel(self, interaction: discord.Interaction, channel_id: int | str | None):
+        if not channel_id:
+            return None
+
+        guild = interaction.guild
+        if guild is not None:
+            channel = guild.get_channel(int(channel_id))
+            if channel is not None:
+                return channel
+
+        try:
+            return await interaction.client.fetch_channel(int(channel_id))
+        except Exception:
+            return None
+
+    async def _archive_terminal_match(self, interaction: discord.Interaction, match, terminal_state: str) -> None:
+        thread = await self._resolve_channel(interaction, self._archive_thread_id(terminal_state))
+        if thread is None or not isinstance(thread, discord.abc.Messageable):
+            return
+
+        lines = [
+            f"{match.id} | {self._match_notice_label(match)}",
+            f"State: {terminal_state.title()}",
+            f"Event: {match.category_slug} / {match.subcategory}",
+            f"Claimed By: {self._assigned_archive_text(match)}",
+            f"Start: {discord_timestamp(match.start_at_utc)}",
+            f"Racetime: {match.racetime_room_url or 'Pending'}",
+        ]
+        if getattr(match, "speedgaming_url", None):
+            lines.append(f"Restream: {match.speedgaming_url}")
+
+        try:
+            await thread.send("\n".join(lines))
+        except Exception as exc:
+            logger.warning("Failed to archive terminal match %s: %s", match.id, exc)
+
+    async def _delete_claim_box(self, interaction: discord.Interaction, match) -> None:
+        channel_id = getattr(match, "claim_channel_id", None)
+        message_id = getattr(match, "claim_message_id", None)
+
+        if channel_id and message_id:
+            channel = await self._resolve_channel(interaction, channel_id)
+            if channel is not None:
+                try:
+                    message = await channel.fetch_message(int(message_id))
+                    await message.delete()
+                except Exception:
+                    pass
+
+        try:
+            self.match_service.clear_claim_message(match.id)
+        except Exception:
+            pass
+
     async def _check_admin_only(self, interaction: discord.Interaction) -> tuple[bool, str]:
         guild = interaction.guild
         if guild is None:
@@ -149,6 +226,9 @@ class MatchCommands(app_commands.Group):
         except Exception:
             pass
 
+        if self._is_bot_admin_member(member):
+            return True, "User has a bot admin role"
+
         return False, "User is not an admin"
 
     async def _check_access_for_subcategory(self, interaction: discord.Interaction, subcategory: str | None) -> tuple[bool, str]:
@@ -167,11 +247,37 @@ class MatchCommands(app_commands.Group):
             if allowed_role_ids.intersection(user_role_ids):
                 return True, "User has a weekly organizer role"
             return False, "Weekly organizer access required."
-        else:
-            allowed_role_ids = set(getattr(self.settings, "allowed_role_ids", []))
-            if allowed_role_ids.intersection(user_role_ids):
-                return True, "User has a tournament organizer role"
-            return False, "Tournament organizer access required."
+
+        allowed_role_ids = set(getattr(self.settings, "allowed_role_ids", []))
+        if allowed_role_ids.intersection(user_role_ids):
+            return True, "User has a tournament organizer role"
+        return False, "Tournament organizer access required."
+
+    async def _check_create_access_for_subcategory(self, interaction: discord.Interaction, subcategory: str | None) -> tuple[bool, str]:
+        is_admin, admin_reason = await self._check_admin_only(interaction)
+        if is_admin:
+            return True, admin_reason
+
+        member = await self._resolve_member(interaction)
+        if member is None:
+            return False, "Could not resolve member"
+
+        user_role_ids = {role.id for role in member.roles}
+
+        if self._is_weekly(subcategory):
+            weekly_role_ids = set(getattr(self.settings, "weekly_allowed_role_ids", []))
+            if weekly_role_ids.intersection(user_role_ids):
+                return True, "User has a weekly organizer role"
+            return False, "Weekly organizer access required."
+
+        organizer_role_ids = set(getattr(self.settings, "allowed_role_ids", []))
+        if organizer_role_ids.intersection(user_role_ids):
+            return True, "User has a tournament organizer role"
+
+        if self.settings.tournament_participant_role_id in user_role_ids:
+            return True, "User has the tournament participant role"
+
+        return False, "Tournament organizer or tournament participant access required."
 
     async def _can_access_match(self, interaction: discord.Interaction, match) -> bool:
         allowed, _ = await self._check_access_for_subcategory(interaction, getattr(match, "subcategory", ""))
@@ -183,14 +289,8 @@ class MatchCommands(app_commands.Group):
         if not channel_id or not message_id:
             return
 
-        channel = interaction.guild.get_channel(int(channel_id)) if interaction.guild else None
-        if channel is None:
-            try:
-                channel = await interaction.client.fetch_channel(int(channel_id))
-            except Exception:
-                return
-
-        if not isinstance(channel, discord.abc.Messageable):
+        channel = await self._resolve_channel(interaction, channel_id)
+        if channel is None or not isinstance(channel, discord.abc.Messageable):
             return
 
         try:
@@ -210,10 +310,7 @@ class MatchCommands(app_commands.Group):
 
         async def _delete_discord_message(channel_id: str | int, message_id: str | int) -> bool:
             try:
-                guild = interaction.guild
-                channel = guild.get_channel(int(channel_id)) if guild else None
-                if channel is None:
-                    channel = await interaction.client.fetch_channel(int(channel_id))
+                channel = await self._resolve_channel(interaction, channel_id)
                 if channel is None:
                     return False
                 message = await channel.fetch_message(int(message_id))
@@ -277,7 +374,7 @@ class MatchCommands(app_commands.Group):
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        allowed, reason = await self._check_access_for_subcategory(interaction, subcategory)
+        allowed, reason = await self._check_create_access_for_subcategory(interaction, subcategory)
         if not allowed:
             await interaction.edit_original_response(content=reason)
             return
@@ -363,7 +460,7 @@ class MatchCommands(app_commands.Group):
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        allowed, reason = await self._check_access_for_subcategory(interaction, subcategory)
+        allowed, reason = await self._check_create_access_for_subcategory(interaction, subcategory)
         if not allowed:
             await interaction.edit_original_response(content=reason)
             return
@@ -804,10 +901,7 @@ class MatchCommands(app_commands.Group):
     @speedgaming.autocomplete("match_id")
     async def speedgaming_match_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         is_admin, _ = await self._check_admin_only(interaction)
-        if is_admin:
-            matches = self.match_service.list_matches(limit=100)
-        else:
-            matches = self.match_service.list_matches(limit=100)
+        matches = self.match_service.list_matches(limit=100)
 
         current_lower = current.lower().strip()
         choices: list[app_commands.Choice[str]] = []
@@ -920,7 +1014,8 @@ class MatchCommands(app_commands.Group):
                 pass
 
             await self._delete_discord_event(updated)
-            await self._refresh_claim_message(interaction, updated)
+            await self._archive_terminal_match(interaction, updated, "complete")
+            await self._delete_claim_box(interaction, updated)
             await self._delete_runtime_messages(interaction, match_id)
 
             await interaction.edit_original_response(content=f"Marked `{match_id}` complete.")
@@ -982,7 +1077,8 @@ class MatchCommands(app_commands.Group):
                 await interaction.edit_original_response(content="Match not found.")
                 return
 
-            await self._refresh_claim_message(interaction, updated)
+            await self._archive_terminal_match(interaction, updated, "cancelled")
+            await self._delete_claim_box(interaction, updated)
             await self._delete_runtime_messages(interaction, match_id)
 
             await interaction.edit_original_response(content=f"Cancelled `{match_id}`.")
