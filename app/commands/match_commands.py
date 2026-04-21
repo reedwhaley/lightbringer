@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -11,9 +12,12 @@ from app.models import Match
 from app.services.calendar_service import CalendarService
 from app.services.discord_event_service import DiscordEventService
 from app.services.match_service import MatchService
+from app.services.olir_client import OLirClient
 from app.services.racetime_service import RacetimeService
 from app.services.reminder_service import ReminderService
+from app.services.sg_match_submit_service import SGMatchSubmitService, IdentitySnapshot
 from app.utils.time_utils import parse_local_time_to_utc, discord_timestamp
+from app.views.crew_signup_view import CrewSignupView
 from app.views.match_claim_view import MatchClaimView
 
 logger = logging.getLogger("lightbringer")
@@ -54,6 +58,8 @@ class MatchCommands(app_commands.Group):
         self.racetime_service = racetime_service
         self.discord_event_service = discord_event_service
         self.reminders = ReminderService()
+        self.olir_client = OLirClient(settings)
+        self.sg_match_submit_service = SGMatchSubmitService(settings)
 
     def _is_weekly(self, subcategory: str | None) -> bool:
         return "weekly" in str(subcategory or "").lower()
@@ -92,10 +98,51 @@ class MatchCommands(app_commands.Group):
     def _compose_seed_value(self, permalink: str, seed_hash: str) -> str:
         return f"{permalink.strip()} || {seed_hash.strip()}"
 
-    def _archive_thread_id(self, terminal_state: str) -> int:
+    def _archive_thread_id(self, match, terminal_state: str) -> int:
+        if self._is_weekly(getattr(match, "subcategory", "")):
+            if terminal_state == "complete":
+                return int(getattr(self.settings, "completed_weekly_matches_thread_id", 0) or 0)
+            return int(getattr(self.settings, "cancelled_weekly_matches_thread_id", 0) or 0)
+
         if terminal_state == "complete":
             return int(self.settings.completed_matches_thread_id)
         return int(self.settings.cancelled_matches_thread_id)
+
+    def _claimed_match_thread_id(self, match) -> int:
+        if self._is_weekly(getattr(match, "subcategory", "")):
+            return 0
+        return int(getattr(self.settings, "claimed_tournament_matches_thread_id", 0) or 0)
+
+    def _completed_comms_thread_id(self, match) -> int:
+        if self._is_weekly(getattr(match, "subcategory", "")):
+            return int(getattr(self.settings, "completed_weekly_comms_thread_id", 0) or 0)
+        return int(getattr(self.settings, "completed_tournament_comms_thread_id", 0) or 0)
+
+    def _sg_match_display(self, match) -> str:
+        if str(match.category_slug).lower() == "mpcgr":
+            team1_players = " & ".join(
+                [
+                    name for name in [
+                        str(getattr(match, "team1_player1_name", "") or "").strip(),
+                        str(getattr(match, "team1_player2_name", "") or "").strip(),
+                    ]
+                    if name
+                ]
+            ) or str(match.team1)
+
+            team2_players = " & ".join(
+                [
+                    name for name in [
+                        str(getattr(match, "team2_player1_name", "") or "").strip(),
+                        str(getattr(match, "team2_player2_name", "") or "").strip(),
+                    ]
+                    if name
+                ]
+            ) or str(match.team2)
+
+            return f"{team1_players} vs {team2_players}"
+
+        return f"{match.team1} vs {match.team2}"
 
     def _is_bot_admin_member(self, member: discord.Member) -> bool:
         admin_role_ids = {
@@ -155,8 +202,35 @@ class MatchCommands(app_commands.Group):
         except Exception:
             return None
 
+    async def _link_match_back_to_olir(self, interaction: discord.Interaction, match) -> str | None:
+        thread_id = interaction.channel_id
+        if not thread_id:
+            return None
+
+        try:
+            pairing_lookup = await self.olir_client.get_pairing_by_thread(str(thread_id))
+        except Exception as exc:
+            logger.info("No O-Lir pairing found for thread %s: %s", thread_id, exc)
+            return None
+
+        pairing_id = str(pairing_lookup.get("pairing_id", "") or "").strip()
+        if not pairing_id:
+            return None
+
+        try:
+            await self.olir_client.link_lightbringer_match(
+                pairing_id=pairing_id,
+                lightbringer_match_id=str(match.id),
+                start_at_utc=match.start_at_utc.replace(tzinfo=ZoneInfo("UTC")).isoformat(),
+            )
+            return f"O-Lir pairing linked: {pairing_id}"
+        except Exception as exc:
+            logger.warning("Failed to link Lightbringer match %s to O-Lir pairing %s: %s", match.id, pairing_id, exc)
+            return f"O-Lir link failed: {exc}"
+
     async def _archive_terminal_match(self, interaction: discord.Interaction, match, terminal_state: str) -> None:
-        thread = await self._resolve_channel(interaction, self._archive_thread_id(terminal_state))
+        thread_id = self._archive_thread_id(match, terminal_state)
+        thread = await self._resolve_channel(interaction, thread_id)
         if thread is None or not isinstance(thread, discord.abc.Messageable):
             return
 
@@ -170,11 +244,30 @@ class MatchCommands(app_commands.Group):
         ]
         if getattr(match, "speedgaming_url", None):
             lines.append(f"Restream: {match.speedgaming_url}")
+        if getattr(match, "sg_episode_id", None):
+            lines.append(f"SG Episode ID: {match.sg_episode_id}")
 
         try:
             await thread.send("\n".join(lines))
         except Exception as exc:
             logger.warning("Failed to archive terminal match %s: %s", match.id, exc)
+
+    async def _archive_completed_comms(self, interaction: discord.Interaction, match) -> None:
+        thread_id = self._completed_comms_thread_id(match)
+        thread = await self._resolve_channel(interaction, thread_id)
+        if thread is None or not isinstance(thread, discord.abc.Messageable):
+            return
+
+        comms = self.match_service.list_crew_signups(match.id, "comms")
+        trackers = self.match_service.list_crew_signups(match.id, "tracker")
+        if not comms and not trackers:
+            return
+
+        embed = CrewSignupView.build_embed(match, comms, trackers)
+        try:
+            await thread.send(embed=embed)
+        except Exception as exc:
+            logger.warning("Failed to archive completed comms for %s: %s", match.id, exc)
 
     async def _delete_claim_box(self, interaction: discord.Interaction, match) -> None:
         channel_id = getattr(match, "claim_channel_id", None)
@@ -193,6 +286,43 @@ class MatchCommands(app_commands.Group):
             self.match_service.clear_claim_message(match.id)
         except Exception:
             pass
+
+    async def _delete_crew_signup_box(self, interaction: discord.Interaction, match) -> None:
+        saved = self.match_service.get_crew_signup_message(match.id)
+        if saved is None:
+            return
+
+        channel = await self._resolve_channel(interaction, saved.channel_id)
+        if channel is None:
+            return
+
+        try:
+            message = await channel.fetch_message(int(saved.message_id))
+            await message.delete()
+        except Exception:
+            pass
+
+        try:
+            self.match_service.clear_crew_signup_message(match.id)
+        except Exception:
+            pass
+
+    async def _move_claim_box_to_claimed_thread(self, interaction: discord.Interaction, match) -> None:
+        thread_id = self._claimed_match_thread_id(match)
+        if not thread_id:
+            return
+
+        thread = await self._resolve_channel(interaction, thread_id)
+        if thread is None or not isinstance(thread, discord.abc.Messageable):
+            return
+
+        embed = MatchClaimView.build_embed(match)
+        try:
+            sent = await thread.send(embed=embed)
+            self.match_service.mark_claim_message(match.id, thread.id, sent.id)
+        except Exception as exc:
+            logger.warning("Failed to move claimed box for %s: %s", match.id, exc)
+            return
 
     async def _check_admin_only(self, interaction: discord.Interaction) -> tuple[bool, str]:
         guild = interaction.guild
@@ -300,10 +430,14 @@ class MatchCommands(app_commands.Group):
 
         role_pool = self.settings.weekly_allowed_role_ids if self._is_weekly(match.subcategory) else self.settings.allowed_role_ids
         primary_role_id = int(role_pool[0]) if role_pool else 0
-        await message.edit(
-            embed=MatchClaimView.build_embed(match),
-            view=MatchClaimView(match.id, primary_role_id),
-        )
+
+        if self._is_weekly(match.subcategory):
+            await message.edit(
+                embed=MatchClaimView.build_embed(match),
+                view=MatchClaimView(match.id, primary_role_id),
+            )
+        else:
+            await message.edit(embed=MatchClaimView.build_embed(match), view=None)
 
     async def _delete_runtime_messages(self, interaction: discord.Interaction, match_id: str) -> None:
         keep_types = {"player_room_open", "weekly_room_open"}
@@ -324,6 +458,103 @@ class MatchCommands(app_commands.Group):
             for item in tracked:
                 await _delete_discord_message(item.channel_id, item.message_id)
             self.reminders.delete_tracked_messages_excluding(session, match_id, list(keep_types))
+
+    async def _fetch_sg_identity(self, discord_id: str) -> IdentitySnapshot:
+        profile = await self.olir_client.fetch_speedgaming_profile(str(discord_id))
+        return IdentitySnapshot(
+            submitted_display_name=str(profile.get("sg_display_name", "")),
+            discord_username_snapshot=str(profile.get("discord_username_snapshot", "")),
+            twitch_name=str(profile.get("sg_twitch_name", "")),
+        )
+
+    async def _post_crew_signup_message(self, interaction: discord.Interaction, match) -> None:
+        channel_id = (
+            self.settings.weekly_comms_signups_channel_id
+            if self._is_weekly(match.subcategory)
+            else self.settings.commentary_tracking_channel_id
+        )
+        if not channel_id:
+            return
+
+        channel = await self._resolve_channel(interaction, channel_id)
+        if channel is None or not isinstance(channel, discord.abc.Messageable):
+            return
+
+        existing = self.match_service.get_crew_signup_message(match.id)
+        comms = self.match_service.list_crew_signups(match.id, "comms")
+        trackers = self.match_service.list_crew_signups(match.id, "tracker")
+        embed = CrewSignupView.build_embed(match, comms, trackers)
+        view = CrewSignupView(match.id, timeout=None)
+
+        if existing is not None:
+            try:
+                msg = await channel.fetch_message(int(existing.message_id))
+                await msg.edit(embed=embed, view=view)
+                return
+            except Exception:
+                pass
+
+        sent = await channel.send(embed=embed, view=view)
+        self.match_service.upsert_crew_signup_message(
+            match_id=match.id,
+            channel_id=int(channel_id),
+            message_id=int(sent.id),
+            is_weekly=self._is_weekly(match.subcategory),
+        )
+
+    async def _maybe_submit_sg_standard(self, match) -> str | None:
+        if not getattr(match, "entrant1_discord_id", None) or not getattr(match, "entrant2_discord_id", None):
+            return "SG submit skipped because one or both entrant Discord accounts were not provided."
+
+        try:
+            player1 = await self._fetch_sg_identity(str(match.entrant1_discord_id))
+            player2 = await self._fetch_sg_identity(str(match.entrant2_discord_id))
+
+            result = self.sg_match_submit_service.submit_standard_match(
+                category_slug=str(match.category_slug),
+                player1=player1,
+                player2=player2,
+                scheduled_dt=match.start_at_utc.replace(tzinfo=ZoneInfo("UTC")),
+                note=str(match.notes or ""),
+                is_weekly=self._is_weekly(match.subcategory),
+            )
+            if result.ok and result.episode_id:
+                self.match_service.set_sg_episode_id(match.id, result.episode_id)
+            return result.message if result.ok else f"SG submit failed: {result.message}"
+        except Exception as exc:
+            return f"SG submit failed: {exc}"
+
+    async def _maybe_submit_sg_cgc(self, match) -> str | None:
+        ids = [
+            getattr(match, "team1_player1_discord_id", None),
+            getattr(match, "team1_player2_discord_id", None),
+            getattr(match, "team2_player1_discord_id", None),
+            getattr(match, "team2_player2_discord_id", None),
+        ]
+        if any(not value for value in ids):
+            return "SG submit skipped because one or more CGC player Discord accounts were missing."
+
+        try:
+            team1_player1 = await self._fetch_sg_identity(str(match.team1_player1_discord_id))
+            team1_player2 = await self._fetch_sg_identity(str(match.team1_player2_discord_id))
+            team2_player1 = await self._fetch_sg_identity(str(match.team2_player1_discord_id))
+            team2_player2 = await self._fetch_sg_identity(str(match.team2_player2_discord_id))
+
+            result = self.sg_match_submit_service.submit_cgc_match(
+                category_slug=str(match.category_slug),
+                team1_player1=team1_player1,
+                team1_player2=team1_player2,
+                team2_player1=team2_player1,
+                team2_player2=team2_player2,
+                scheduled_dt=match.start_at_utc.replace(tzinfo=ZoneInfo("UTC")),
+                note=str(match.notes or ""),
+                is_weekly=self._is_weekly(match.subcategory),
+            )
+            if result.ok and result.episode_id:
+                self.match_service.set_sg_episode_id(match.id, result.episode_id)
+            return result.message if result.ok else f"SG submit failed: {result.message}"
+        except Exception as exc:
+            return f"SG submit failed: {exc}"
 
     async def _safe_reminder_notice(self, interaction: discord.Interaction, message: str, weekly: bool) -> None:
         guild = interaction.guild
@@ -422,9 +653,26 @@ class MatchCommands(app_commands.Group):
             )
             self.match_service.mark_claim_message(match.id, claim_channel.id, sent_message.id)
 
-        await interaction.edit_original_response(
-            content=f"Created match `{match.id}` for {discord_timestamp(match.start_at_utc)}."
-        )
+        sg_message = await self._maybe_submit_sg_standard(match)
+
+        refreshed = self.match_service.get_match(match.id)
+        if refreshed is not None:
+            match = refreshed
+
+        try:
+            await self._post_crew_signup_message(interaction, match)
+        except Exception as exc:
+            logger.warning("Failed to post crew signup message for %s: %s", match.id, exc)
+
+        olir_message = await self._link_match_back_to_olir(interaction, match)
+
+        response_text = f"Created match `{match.id}` for {discord_timestamp(match.start_at_utc)}."
+        if sg_message:
+            response_text += f"\n{sg_message}"
+        if olir_message:
+            response_text += f"\n{olir_message}"
+
+        await interaction.edit_original_response(content=response_text)
 
     @app_commands.command(name="create_cgc", description="Create a CGC team match")
     @app_commands.describe(
@@ -514,9 +762,26 @@ class MatchCommands(app_commands.Group):
             )
             self.match_service.mark_claim_message(match.id, claim_channel.id, sent_message.id)
 
-        await interaction.edit_original_response(
-            content=f"Created CGC match `{match.id}` for {discord_timestamp(match.start_at_utc)}."
-        )
+        sg_message = await self._maybe_submit_sg_cgc(match)
+
+        refreshed = self.match_service.get_match(match.id)
+        if refreshed is not None:
+            match = refreshed
+
+        try:
+            await self._post_crew_signup_message(interaction, match)
+        except Exception as exc:
+            logger.warning("Failed to post crew signup message for %s: %s", match.id, exc)
+
+        olir_message = await self._link_match_back_to_olir(interaction, match)
+
+        response_text = f"Created CGC match `{match.id}` for {discord_timestamp(match.start_at_utc)}."
+        if sg_message:
+            response_text += f"\n{sg_message}"
+        if olir_message:
+            response_text += f"\n{olir_message}"
+
+        await interaction.edit_original_response(content=response_text)
 
     @create.autocomplete("subcategory")
     @create_cgc.autocomplete("subcategory")
@@ -666,6 +931,11 @@ class MatchCommands(app_commands.Group):
         except Exception:
             pass
 
+        try:
+            await self._post_crew_signup_message(interaction, updated)
+        except Exception:
+            pass
+
         await interaction.edit_original_response(
             content=f"Updated `{match_id}` successfully."
         )
@@ -701,6 +971,7 @@ class MatchCommands(app_commands.Group):
             await interaction.response.send_message(reason, ephemeral=True)
             return
 
+        old_match = match
         updated = self.match_service.assign_match(match_id, user.id, user.display_name)
         if not updated:
             await interaction.response.send_message("Match not found.", ephemeral=True)
@@ -710,7 +981,12 @@ class MatchCommands(app_commands.Group):
         if refreshed:
             self.calendar_service.upsert_match_event(refreshed)
             await self._upsert_discord_event(refreshed)
-            await self._refresh_claim_message(interaction, refreshed)
+
+            if self._is_weekly(refreshed.subcategory):
+                await self._refresh_claim_message(interaction, refreshed)
+            else:
+                await self._delete_claim_box(interaction, old_match)
+                await self._move_claim_box_to_claimed_thread(interaction, refreshed)
 
         await interaction.response.send_message(f"Assigned `{match_id}` to {user.mention}.", ephemeral=True)
 
@@ -746,6 +1022,7 @@ class MatchCommands(app_commands.Group):
             )
             return
 
+        old_match = match
         updated = self.match_service.assign_match(match_id, interaction.user.id, interaction.user.display_name)
         if not updated:
             await interaction.response.send_message("Match not found.", ephemeral=True)
@@ -755,7 +1032,12 @@ class MatchCommands(app_commands.Group):
         if refreshed:
             self.calendar_service.upsert_match_event(refreshed)
             await self._upsert_discord_event(refreshed)
-            await self._refresh_claim_message(interaction, refreshed)
+
+            if self._is_weekly(refreshed.subcategory):
+                await self._refresh_claim_message(interaction, refreshed)
+            else:
+                await self._delete_claim_box(interaction, old_match)
+                await self._move_claim_box_to_claimed_thread(interaction, refreshed)
 
         await interaction.response.send_message(f"You claimed `{match_id}`.", ephemeral=True)
 
@@ -894,6 +1176,11 @@ class MatchCommands(app_commands.Group):
         except Exception:
             pass
 
+        try:
+            await self._post_crew_signup_message(interaction, updated)
+        except Exception:
+            pass
+
         await interaction.edit_original_response(
             content=f"SpeedGaming URL saved for `{match_id}` and Discord event updated."
         )
@@ -1015,7 +1302,9 @@ class MatchCommands(app_commands.Group):
 
             await self._delete_discord_event(updated)
             await self._archive_terminal_match(interaction, updated, "complete")
+            await self._archive_completed_comms(interaction, updated)
             await self._delete_claim_box(interaction, updated)
+            await self._delete_crew_signup_box(interaction, updated)
             await self._delete_runtime_messages(interaction, match_id)
 
             await interaction.edit_original_response(content=f"Marked `{match_id}` complete.")
@@ -1079,6 +1368,7 @@ class MatchCommands(app_commands.Group):
 
             await self._archive_terminal_match(interaction, updated, "cancelled")
             await self._delete_claim_box(interaction, updated)
+            await self._delete_crew_signup_box(interaction, updated)
             await self._delete_runtime_messages(interaction, match_id)
 
             await interaction.edit_original_response(content=f"Cancelled `{match_id}`.")
@@ -1091,7 +1381,11 @@ class MatchCommands(app_commands.Group):
             ]
             if match.racetime_room_url:
                 notice_lines.append(f"Racetime room: {match.racetime_room_url}")
-            notice_lines.append("Please update SpeedGaming / partner listings if applicable.")
+
+            sg_episode_id = str(getattr(match, "sg_episode_id", "") or "").strip()
+            if sg_episode_id:
+                notice_lines.append(f"SpeedGaming episode to delete: {sg_episode_id}")
+                notice_lines.append(f"SpeedGaming listing: {self._sg_match_display(match)}")
 
             await self._safe_reminder_notice(interaction, "\n".join(notice_lines), self._is_weekly(match.subcategory))
 

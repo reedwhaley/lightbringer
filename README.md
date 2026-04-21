@@ -1,150 +1,65 @@
-# Lightbringer Bot
+# Lightbringer
 
-Lightbringer is a Discord bot for tournament and weekly match management.
+Lightbringer is a Discord bot for match scheduling, organizer workflows, SpeedGaming coordination, crew signup handling, Racetime room automation, and event sync for Metroid Prime events.
 
-It handles:
+It is built for recurring weekly races and tournament operations where staff need one bot to manage match creation, room timing, crew signups, reminders, and archival flows.
 
-- Match creation for standard and CGC races
-- Claiming and organizer management
-- Racetime room creation and room info updates
-- Google Calendar sync
-- Discord scheduled event sync
-- Seed timing and organizer reminders
-- Daily tournament briefing posts
-- SpeedGaming restream link updates
-- Match completion and cancellation cleanup
-- Archive posting for completed and cancelled matches
+## What Lightbringer does
 
-## What the bot does
+Lightbringer handles the day to day match workflow for tournament staff and weekly organizers.
 
-Lightbringer is built to reduce manual organizer work.
+Core capabilities include:
 
-It creates and tracks matches, posts claim cards, opens Racetime rooms, keeps calendar and Discord events in sync, and helps tournament staff recover from organizer no shows.
+- Create standard 1v1 matches
+- Create CGC team matches
+- Assign or claim matches
+- Track organizer ownership
+- Open and sync Racetime rooms
+- Store and reveal seeds
+- Store CGC room credentials and DM them at the right time
+- Track SpeedGaming episode IDs and restream links
+- Post and manage commentary and tracker signup boxes
+- Sync match state to Google Calendar and Discord scheduled events
+- Archive completed and cancelled matches
+- Report final results back to O-Lir
+- Attempt automatic SpeedGaming Twitch link detection shortly before match start
 
-The bot currently supports:
+## Main use cases
 
-- `mpr`
-- `mp2r`
-- `mpcgr`
+### Weekly operations
 
-## Match types
+Use Lightbringer when you have recurring weekly races and want one command flow for creation, reminders, room opening, crew signups, and archiving.
 
-The bot behavior is driven by the match subcategory text.
+### Tournament organizer workflow
 
-### Tournament matches
+Use Lightbringer when tournament staff need to create scheduled matches, let organizers claim or be assigned, set seeds, post crew signup boxes, and keep everything synced across Discord, Racetime, and calendar events.
 
-If the subcategory contains `Tournament`, the bot treats it as a tournament match.
+### CGC team match handling
 
-Tournament features include:
+Use Lightbringer when a match needs team member assignment plus private team room names and passwords that are only sent to the correct players.
 
-- Claim and manage flow on the claim card
-- Organizer takeover and unclaim options
-- Tournament reminder behavior
-- Daily tournament briefing posts
-- Ranked Racetime rooms
-- Archive posting for completed and cancelled matches
+### SpeedGaming coordination
 
-### Weekly matches
+Use Lightbringer when you want to track a restream URL manually or let the bot try to detect a live SpeedGaming Twitch channel shortly before the match.
 
-If the subcategory contains `Weekly`, the bot treats it as a weekly.
+## Command groups
 
-Weekly features include:
+Lightbringer currently exposes one main command group:
 
-- Weekly organizer permissions
-- Weekly channel routing
-- Weekly role pings
-- Ranked Racetime rooms
+- `/match`
 
-## Permissions
+## Match commands
 
-### Tournament participants
-
-Tournament participants can:
-
-- Create or schedule tournament matches
-- Create or schedule tournament CGC matches
-- Cancel matches they are participating in
-
-Tournament participants cannot:
-
-- Claim matches
-- Manage organizer ownership
-- Take over or unclaim matches from the claim card
-- Set seeds
-- Set SpeedGaming links
-- Update match details unless they are also the assigned organizer or an admin
-- Complete matches unless they are also the assigned organizer or an admin
-
-### Tournament organizers
-
-Tournament organizers can:
-
-- Create tournament matches
-- Claim tournament matches
-- Use the claim card manage flow on tournament matches
-- Set seeds for matches assigned to them
-- Set CGC room names and passwords for matches assigned to them
-- Update match information for matches assigned to them
-- Cancel matches they are assigned to
-- Complete matches they are assigned to
-- Set SpeedGaming links for tournament matches they have access to
-
-### Weekly organizers
-
-Weekly organizers can:
-
-- Create weekly matches
-- Claim weekly matches
-- Set seeds for weekly matches assigned to them
-- Update weekly matches assigned to them
-- Cancel weekly matches they are assigned to
-- Complete weekly matches they are assigned to
-- Set SpeedGaming links for weekly matches they have access to
-
-### Admins
-
-Admins can do everything.
-
-This includes:
-
-- Discord users with the Discord Administrator permission
-- Tournament Admin role
-- Server Admin role
-
-## Time entry format
-
-The bot accepts both of these formats for the match time field:
-
-- `2026-04-19 12:26`
-- `2026-04-19 1226`
-
-Three digit times also work:
-
-- `2026-04-19 926`
-
-## Core command guide
-
-All commands are slash commands under `/match`.
-
----
-
-## `/match create`
+### `/match create`
 
 Create a standard 1v1 match.
 
-### Use when
+Use this for:
+- MPR tournament matches
+- MP2R tournament matches
+- Weekly single player races
 
-Use this for normal tournament or weekly races in `mpr` or `mp2r`.
-
-### Who can use it
-
-- Tournament participants for tournament matches
-- Tournament organizers for tournament matches
-- Weekly organizers for weekly matches
-- Admins
-
-### Required fields
-
+Required inputs:
 - `category`
 - `subcategory`
 - `team1`
@@ -153,40 +68,29 @@ Use this for normal tournament or weekly races in `mpr` or `mp2r`.
 - `timezone_name`
 - `match_name`
 
-### Optional fields
-
+Optional inputs:
 - `team1_user`
 - `team2_user`
 - `notes`
 
-### Notes
+What it does:
+- Creates the match in the local database
+- Creates or updates the calendar event
+- Creates or updates the Discord scheduled event
+- Posts the claim card
+- Attempts SpeedGaming match submission if entrant identities are available
+- Posts the crew signup box
+- Links the created match back to the matching O-Lir pairing when run inside an O-Lir scheduling thread
 
-- `match_name` is required and is the main title used in events, lists, and claim cards.
-- `notes` is optional and can be used for race admin notes or other internal details.
-
-### Example
-
-`/match create category:mpr subcategory:"Prime Tournament" team1:"Player A" team2:"Player B" start_local:"2026-04-19 1226" timezone_name:CT match_name:"Prime Round 1"`
-
----
-
-## `/match create_cgc`
+### `/match create_cgc`
 
 Create a CGC team match.
 
-### Use when
+Use this for:
+- MPCGR team races
+- Team based tournament races
 
-Use this for `mpcgr` team races.
-
-### Who can use it
-
-- Tournament participants for tournament matches
-- Tournament organizers for tournament matches
-- Weekly organizers for weekly matches
-- Admins
-
-### Required fields
-
+Required inputs:
 - `category`
 - `subcategory`
 - `team1`
@@ -199,483 +103,372 @@ Use this for `mpcgr` team races.
 - `timezone_name`
 - `match_name`
 
-### Optional fields
-
+Optional inputs:
 - `notes`
 
-### Example
+What it does:
+- Creates the team match
+- Stores team member names and Discord IDs
+- Creates or updates the calendar event
+- Creates or updates the Discord scheduled event
+- Posts the claim card
+- Attempts SpeedGaming match submission if all team identities are available
+- Posts the crew signup box
+- Links the created match back to O-Lir when possible
 
-`/match create_cgc category:mpcgr subcategory:"CGC Tournament" team1:"Team Alpha" team2:"Team Beta" team1_player1_user:@A team1_player2_user:@B team2_player1_user:@C team2_player2_user:@D start_local:"2026-04-19 1900" timezone_name:CT match_name:"CGC Quarterfinal 1"`
+### `/match update`
 
----
+Update an existing scheduled match.
 
-## `/match update`
+Use this when:
+- The visible match title changed
+- Team or entrant names changed
+- Player Discord assignments need correction
+- Notes need updating
 
-Update an existing match.
-
-### Who can use it
-
-- Assigned organizer
-- Admins
-
-### What it can update
-
+What it can update:
 - `match_name`
 - `team1`
 - `team2`
-- Standard participant Discord users
+- Standard entrant Discord users
 - CGC player Discord users
 - `notes`
 
-### Use when
+Who can use it:
+- The assigned organizer
+- Admins
 
-Use this if a match name changes, participant assignments need correction, or notes need to be adjusted after creation.
+What it does:
+- Saves the updates
+- Refreshes calendar data
+- Refreshes the Discord scheduled event
+- Refreshes the claim card
+- Refreshes the crew signup box
 
-### Example
-
-`/match update match_id:MPR-ABC123 match_name:"Prime Round 1 Updated" notes:"Optional notes for match (RAs, etc) go here."`
-
----
-
-## `/match assign`
+### `/match assign`
 
 Assign a match to a specific organizer.
 
-### Who can use it
+Use this when:
+- Staff already know who should cover the match
+- You do not want to wait for manual claiming
 
-- Organizer with access to that match type
+Who can use it:
+- Organizers with access to that match type
 - Admins
 
-### Use when
+What it does:
+- Assigns the organizer
+- Updates the calendar event
+- Updates the Discord scheduled event
+- Refreshes the weekly claim card
+- For tournament matches, moves the claim card into the claimed tournament matches archive thread
 
-Use this to directly assign a match to a known organizer instead of waiting for them to claim it.
-
-### Example
-
-`/match assign match_id:MPR-ABC123 user:@Organizer`
-
----
-
-## `/match claim`
+### `/match claim`
 
 Claim an unassigned match for yourself.
 
-### Who can use it
+Use this when:
+- An organizer wants to take ownership of an open match
 
-- Organizer with access to that match type
+Who can use it:
+- Organizers with access to that match type
 - Admins
 
-### Use when
+What it does:
+- Assigns the match to the user who claimed it
+- Updates calendar and event data
+- Refreshes or relocates the claim card depending on match type
 
-Use this to claim an unassigned match without using the claim card button.
+Restrictions:
+- A participant in the match cannot claim that match
 
-### Example
-
-`/match claim match_id:MPR-ABC123`
-
----
-
-## Claim card button behavior
-
-The claim card in Discord is the primary organizer workflow.
-
-### Unclaimed match
-
-The card shows a blue `Claim` button.
-
-Clicking it claims the match for the organizer who clicked it.
-
-### Claimed tournament match
-
-The card shows a red `Unclaim / Takeover` button.
-
-Clicking it opens a management flow with two options:
-
-- Take over
-- Unclaim
-
-After choosing an action, a reason is required.
-
-Reason options:
-
-- Assigned organizer no-show
-- Personal issue
-- Accidental claim
-- Emergency coverage
-- Other
-
-The bot then:
-
-- Reassigns or unclaims the match
-- Updates calendar and Discord event data
-- Refreshes the claim card
-- Logs the action in the tournament admin channel
-
-### Claimed non-tournament match
-
-The card shows `Claimed`.
-
-The tournament management flow is only enabled for tournament matches.
-
----
-
-## `/match set_seed`
+### `/match set_seed`
 
 Set the seed permalink and hash for a match.
 
-### Who can use it
-
-- Assigned organizer
-- Admins
-
-### Required fields
-
+Required inputs:
 - `match_id`
 - `permalink`
 - `seed_hash`
 
-### What it does
+Who can use it:
+- The assigned organizer
+- Admins
 
-- Saves the seed to the database
-- Updates the Google Calendar event
+What it does:
+- Saves the seed
+- Updates the calendar event
 - Updates the Discord scheduled event
-- Updates the Racetime room info if the room already exists
+- Updates Racetime room info if the room already exists
 
-### Example
-
-`/match set_seed match_id:MPR-ABC123 permalink:DZgCWw8-ZEBv... seed_hash:"Caverns Boost Oculus (AJNQ6PTE)"`
-
----
-
-## `/match speedgaming`
+### `/match speedgaming`
 
 Set the SpeedGaming or restream Twitch URL for a match.
 
-### Who can use it
+Required inputs:
+- `match_id`
+- `url`
 
-- Any organizer with access to that match type
+Who can use it:
+- Organizers with access to that match type
 - Admins
 
-### What it does
-
-- Saves the restream URL
-- Updates the Google Calendar event
+What it does:
+- Stores the restream URL
+- Updates the calendar event
 - Updates the Discord scheduled event
-- Adds the `Restream:` line in the Discord event description
-- Uses the SpeedGaming link as the Discord event location when present
-- Can be used even if you are not the assigned organizer, as long as you have organizer access for that match type
+- Refreshes related match displays
 
-### Example
+### `/match password`
 
-`/match speedgaming match_id:MPR-ABC123 url:"https://www.twitch.tv/speedgaming"`
+Set the RDV room name and password for one CGC team.
 
----
-
-## `/match password`
-
-Set the RDV room name and password for a CGC team.
-
-### Who can use it
-
-- Assigned organizer
-- Admins
-
-### Only available for
-
-- `mpcgr`
-
-### Required fields
-
+Required inputs:
 - `match_id`
 - `team`
 - `room_name`
 - `password`
 
-### What it does
+Who can use it:
+- The assigned organizer
+- Admins
 
-- Stores the team room name and password
-- Updates calendar and Discord event data
-- At the correct time, the bot DMs the right team members their room details
+Only valid for:
+- `mpcgr`
 
-### Example
+What it does:
+- Stores the private room name and password for the selected team
+- Updates calendar and event data
+- Later DMs the correct team members with their room credentials
 
-`/match password match_id:MPCGR-ABC123 team:team1 room_name:"CGC Room A" password:"secret123"`
-
----
-
-## `/match complete`
+### `/match complete`
 
 Mark a match complete.
 
-### Who can use it
-
-- Assigned organizer
+Who can use it:
+- The assigned organizer
 - Admins
 
-### What it does
-
+What it does:
 - Marks the match complete
+- Updates the calendar event
 - Deletes the Discord scheduled event
-- Posts a plain text archive summary into the completed matches thread
-- Deletes the original claim box from the claim channel
-- Cleans up runtime reminder messages
+- Archives the completed match summary
+- Archives the completed comms summary
+- Deletes the claim box
+- Deletes the crew signup box
+- Cleans up tracked reminder messages
 
-### Example
-
-`/match complete match_id:MPR-ABC123`
-
----
-
-## `/match cancel`
+### `/match cancel`
 
 Cancel a match.
 
-### Who can use it
-
-- Assigned organizer
+Who can use it:
+- The assigned organizer
 - Admins
 - Participants in that match
 
-### What it does
-
-- Cancels the match
-- Deletes the Google Calendar event
+What it does:
+- Deletes the calendar event
 - Deletes the Discord scheduled event
-- Posts a plain text archive summary into the cancelled matches thread
-- Deletes the original claim box from the claim channel
-- Cleans up runtime reminder messages
-- Posts a notice to the correct reminder channel
+- Marks the match cancelled
+- Archives the cancelled match summary
+- Deletes the claim box
+- Deletes the crew signup box
+- Cleans up tracked reminder messages
+- Posts a staff facing notice with SpeedGaming episode information when available
 
-### Example
+### `/match list`
 
-`/match cancel match_id:MPR-ABC123`
+List active upcoming matches.
 
----
-
-## `/match list`
-
-Show upcoming active matches.
-
-### What it shows
-
+What it shows:
 - Match ID
-- Match title or participant names
+- Match title or player names
 - Category and subcategory
-- Start time
-- Claimed organizer
+- Scheduled time
+- Assigned organizer
 
-### Example
+## Crew signup workflow
 
-`/match list`
+Lightbringer posts crew signup boxes for commentary and trackers.
 
----
+### Signup behavior
 
-## Automation and timing guide
+Each signup box supports:
+- Comms signups
+- Tracker signups
 
-## Racetime room opening
+What it stores:
+- Display name
+- Twitch name
+- Discord username snapshot
 
-The bot opens the Racetime room 30 minutes before the race start.
+What it also does:
+- Attempts to submit the signup to the appropriate SpeedGaming volunteer page when an SG episode ID exists
+- Prevents local signup storage if the SG submission fails
+- Allows users to retry if the external signup fails
 
-## Seed prompt timing
+### Signup links
 
-The bot prompts for seed handling at T minus 20.
+If an SG episode ID is known, the embed shows:
+- The commentator signup URL
+- The tracker signup URL
 
-## Organizer reminder timing
+## Automation and timing
 
-There is one organizer reminder for each active match.
+### Racetime room opening
 
-- Reminder time: T minus 60 from race start
-- Meaning: Racetime setup opens in 30 minutes
+The bot opens Racetime rooms automatically when the room open time is reached.
 
-If the match is claimed:
+### Seed prompt timing
+
+The bot sends seed prompts at T minus 20 when seed entry is still pending.
+
+### Organizer reminder timing
+
+The bot sends a reminder at T minus 60 from match start.
+
+If the match is assigned:
 - The assigned organizer is pinged
 
-If the match is unclaimed:
+If the match is unassigned:
 - The fallback staff role is pinged
 
-## CGC password DM timing
+### CGC password delivery
 
-For CGC matches, team room credentials are DMd to the correct players at the correct time once they are stored.
+For CGC matches, team room credentials are DMd to the correct players once seed room info is ready.
 
-## Racetime room state syncing
+### Racetime room state sync
 
-If the Racetime room changes state, the bot syncs back to the local match.
-
-Handled states include:
-
-- Active race
-- Complete
+The bot polls Racetime and reacts to these remote states:
+- In progress
+- Finished
 - Cancelled
 
-If Racetime cancels the room:
-- The bot cancels the local match
-- Removes calendar and event data
-- Posts an archive summary
-- Deletes the claim box
-- Posts a notice for staff
+Effects include:
+- Marking a match active
+- Marking a match complete
+- Cancelling a match
+- Reporting results to O-Lir
+- Cleaning up runtime messages
 
-If Racetime finishes the room:
-- The bot completes the local match
-- Removes the Discord scheduled event
-- Posts an archive summary
-- Deletes the claim box
-- Cleans up runtime messages
+### Daily tournament briefing
 
-## Daily tournament briefing
+The bot posts a daily briefing listing tournament matches for that day.
 
-The bot posts a tournament briefing each day at 10:00 AM Central.
+### Automatic SpeedGaming link scan
 
-### Where it posts
+Roughly five minutes before match start, the bot can scan the public SpeedGaming Twitch channels and try to detect which channel is carrying the scheduled match.
 
-- Tournament staff channel
+If exactly one strong match is found:
+- The bot stores the Twitch URL as the restream link
+- Updates the calendar event
+- Updates the Discord scheduled event
 
-### What it includes
+If no clear match is found:
+- The bot does nothing
 
-- One staff ping at the top
-- All tournament matches for that day
-- Match label
-- Local time
-- Claimed or unclaimed status
+If more than one possible match is found:
+- The bot does nothing rather than guessing
 
-### Format
+## O-Lir integration
 
-`Match Label || <local time> || **Claimed by @User**`
+Lightbringer integrates with O-Lir for identity lookups, pairing linking, and result reporting.
 
-or
+What it does:
+- Reads SpeedGaming identity data from O-Lir
+- Reads entrant identity data from O-Lir
+- Links created matches back to O-Lir pairing records
+- Reports completed match results back to O-Lir
 
-`Match Label || <local time> || **UNCLAIMED**`
+This allows O-Lir to remain the tournament bracket and pairing system while Lightbringer handles live scheduling and match execution.
 
-## Archive threads
+## Roles and permissions
 
-Completed and cancelled matches are archived into dedicated threads.
+Lightbringer supports several access patterns.
 
-### Completed matches thread
+### Admin level access
 
-Used for plain text summaries of completed matches.
+Admins can:
+- Create matches
+- Update matches
+- Assign matches
+- Set seeds
+- Complete matches
+- Cancel matches
+- Override normal organizer restrictions
 
-### Cancelled matches thread
+### Organizer access
 
-Used for plain text summaries of cancelled matches.
+Organizers can:
+- Claim or be assigned matches
+- Manage matches for categories they are allowed to handle
+- Set seeds
+- Set SpeedGaming links
+- Set CGC team credentials when assigned
 
-### Archive summary format
+### Participant restrictions
 
-Each archive post includes:
+Participants may:
+- Create matches if granted tournament participant role access
+- Cancel matches they are part of
 
-- Match ID
-- Match name
-- Final state
-- Event category and subcategory
-- Claimed organizer as plain text
-- Start time
-- Racetime link
-- Restream link if present
+Participants may not:
+- Claim matches they are part of
 
-The archive summary does not ping the organizer.
+## Data and sync targets
 
-## Google Calendar and Discord events
+Lightbringer keeps match information in sync across:
+- SQLite or the configured database
+- Google Calendar
+- Discord scheduled events
+- Discord claim and signup messages
+- Racetime room state
+- O-Lir result and pairing linkage
+- SpeedGaming match and volunteer workflows
 
-The bot keeps calendar and Discord event data in sync whenever the match changes.
-
-This includes updates after:
-
-- create
-- assign
-- claim
-- takeover
-- unclaim
-- set_seed
-- speedgaming
-- password
-- update
-- complete
-- cancel
-
-## Recommended workflow
+## Recommended workflows
 
 ### Standard tournament match
 
 1. Create the match with `/match create`
-2. Organizer claims the match
-3. Room opens automatically
-4. Organizer sets seed with `/match set_seed`
-5. If SpeedGaming assigns a restream, set it with `/match speedgaming`
-6. Complete the match with `/match complete`
+2. Organizer claims or is assigned the match
+3. Racetime room opens automatically
+4. Organizer sets the seed with `/match set_seed`
+5. If a restream is assigned, set it with `/match speedgaming` or let the Twitch scan find it
+6. Mark the match complete with `/match complete`
 
-### CGC match
+### CGC team match
 
 1. Create the match with `/match create_cgc`
-2. Organizer claims the match
-3. Room opens automatically
-4. Organizer sets both team room names and passwords with `/match password`
-5. Organizer sets the seed with `/match set_seed`
-6. If needed, set the restream with `/match speedgaming`
-7. Complete the match with `/match complete`
+2. Organizer claims or is assigned the match
+3. Store both team room credentials with `/match password`
+4. Set the seed with `/match set_seed`
+5. Set the restream URL if needed
+6. Complete the match with `/match complete`
 
-### Organizer no-show recovery
+### Weekly match flow
 
-1. On a claimed tournament card, click `Unclaim / Takeover`
-2. Choose `Take over` or `Unclaim`
-3. Choose a reason
-4. The bot updates the claim state and logs the action to the admin channel
+1. Create the weekly match
+2. Organizer claim happens through the weekly claim workflow
+3. Weekly room opens automatically
+4. Crew signups collect comms and trackers
+5. Match finishes and gets archived into weekly archive threads
 
-## Troubleshooting
+## Environment notes
 
-## The create command says it cannot parse time
+This bot expects environment variables for:
+- Discord credentials
+- Racetime category credentials
+- Google Calendar credentials
+- O-Lir API access
+- SpeedGaming settings
+- Twitch API access if automatic restream scanning is enabled
 
-Check:
+## Repository purpose
 
-- Date format is `YYYY-MM-DD`
-- Time is either `HH:MM`, `HHMM`, or `HMM`
-- Timezone is one of the supported aliases
+This repository is for the operational bot that runs live match handling.
 
-Examples:
-
-- `2026-04-19 12:26`
-- `2026-04-19 1226`
-- `2026-04-19 926`
-
-## The claim card does not allow takeover
-
-Takeover is only enabled for tournament matches.
-
-The subcategory must contain `Tournament`.
-
-## The Racetime room did not update immediately
-
-Check:
-
-- The category has valid Racetime client credentials
-- The room was created as listed, not unlisted
-- The seed or room update command completed successfully
-
-## The Discord event looks wrong
-
-Check:
-
-- The match has the correct `match_name`
-- The SpeedGaming link is set if you want a restream shown
-- The event location uses the SpeedGaming link first when present
-
-## Notes on naming
-
-### `match_name`
-
-This is the required display title for the match.
-
-Use this for the actual public-facing match title you want shown in:
-
-- claim cards
-- Discord scheduled events
-- lists
-- daily briefing posts
-- archive summaries
-
-### `notes`
-
-This is optional.
-
-Use it for internal notes such as:
-
-- runners agreements
-- special handling notes
-- staff-only reminders
+If O-Lir is the tournament brain, Lightbringer is the scheduling and execution layer.

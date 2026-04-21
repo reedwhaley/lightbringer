@@ -39,6 +39,7 @@ class Match(Base):
 
     stream_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     speedgaming_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    sg_episode_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[str] = mapped_column(String(32), default="open")
@@ -90,4 +91,31 @@ class MessageLog(Base):
     message_type: Mapped[str] = mapped_column(String(64), index=True)
     channel_id: Mapped[str] = mapped_column(String(32), index=True)
     message_id: Mapped[str] = mapped_column(String(32), index=True)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow)
+
+
+class CrewSignup(Base):
+    __tablename__ = "crew_signups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String(32), index=True)
+    role_type: Mapped[str] = mapped_column(String(32), index=True)  # comms or tracker
+
+    discord_id: Mapped[str] = mapped_column(String(32), index=True)
+    discord_username: Mapped[str] = mapped_column(String(100))
+    display_name: Mapped[str] = mapped_column(String(200))
+    twitch_name: Mapped[str] = mapped_column(String(100))
+
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow)
+
+
+class CrewSignupMessage(Base):
+    __tablename__ = "crew_signup_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String(32), index=True, unique=True)
+    channel_id: Mapped[str] = mapped_column(String(32))
+    message_id: Mapped[str] = mapped_column(String(32))
+    is_weekly: Mapped[bool] = mapped_column(Boolean, default=False)
+
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow)

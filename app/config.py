@@ -48,12 +48,23 @@ class Settings:
     cancelled_matches_thread_id: int
     lightbringer_logs_thread_id: int
 
+    olir_api_base_url: str
+    olir_internal_api_token: str
+
+    sg_base_url: str
+    sg_sessionid: str
+    sg_csrftoken: str
+    sg_user_agent: str
+
     default_timezone: str
     database_url: str
     google_client_id: str
     google_client_secret: str
     google_refresh_token: str
     racetime_categories: dict[str, RacetimeCategoryConfig]
+
+    twitch_client_id: str
+    twitch_client_secret: str
 
 
 def _required(name: str) -> str:
@@ -62,6 +73,8 @@ def _required(name: str) -> str:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
 
+def _optional(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
 
 def _parse_role_list(name: str) -> list[int]:
     return [int(x.strip()) for x in _required(name).split(",") if x.strip()]
@@ -122,10 +135,18 @@ def get_settings() -> Settings:
         completed_matches_thread_id=int(_required("COMPLETED_MATCHES_THREAD_ID")),
         cancelled_matches_thread_id=int(_required("CANCELLED_MATCHES_THREAD_ID")),
         lightbringer_logs_thread_id=int(_required("LIGHTBRINGER_LOGS_THREAD_ID")),
+        olir_api_base_url=_required("OLIR_API_BASE_URL").rstrip("/"),
+        olir_internal_api_token=_required("OLIR_INTERNAL_API_TOKEN"),
+        sg_base_url=os.getenv("SG_BASE_URL", "https://speedgaming.org").strip(),
+        sg_sessionid=_optional("SG_SESSIONID", ""),
+        sg_csrftoken=_optional("SG_CSRFTOKEN", ""),
+        sg_user_agent=os.getenv("SG_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 OPR/129.0.0.0").strip(),
         default_timezone=os.getenv("DEFAULT_TIMEZONE", "America/New_York").strip(),
         database_url=os.getenv("DATABASE_URL", "sqlite:///lightbringer.db").strip(),
         google_client_id=_required("GOOGLE_CLIENT_ID"),
         google_client_secret=_required("GOOGLE_CLIENT_SECRET"),
         google_refresh_token=_required("GOOGLE_REFRESH_TOKEN"),
         racetime_categories=categories,
+        twitch_client_id=_optional("TWITCH_CLIENT_ID", ""),
+        twitch_client_secret=_optional("TWITCH_CLIENT_SECRET", ""),
     )

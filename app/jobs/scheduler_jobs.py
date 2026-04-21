@@ -12,8 +12,11 @@ from app.models import Match
 from app.services.calendar_service import CalendarService
 from app.services.discord_event_service import DiscordEventService
 from app.services.match_service import MatchService
+from app.services.olir_client import OLirClient
+from app.services.racetime_result_service import RacetimeResultService
 from app.services.racetime_service import RacetimeService
 from app.services.reminder_service import ReminderService
+from app.services.twitch_service import TwitchService
 from app.utils.time_utils import discord_timestamp
 from app.views.match_claim_view import MatchClaimView
 
@@ -36,6 +39,9 @@ class SchedulerJobs:
         self.discord_event_service = discord_event_service
         self.reminders = ReminderService()
         self.match_service = MatchService()
+        self.olir_client = OLirClient(settings)
+        self.racetime_result_service = RacetimeResultService()
+        self.twitch_service = TwitchService(settings)
         self.central_tz = ZoneInfo("America/Chicago")
 
     def _is_weekly(self, subcategory: str | None) -> bool:
@@ -94,9 +100,10 @@ class SchedulerJobs:
         return int(self.settings.reminder_channel_id)
 
     def _weekly_ping_role_for_match(self, match: Match) -> int | None:
+        role_map = getattr(self.settings, "weekly_ping_role_ids", {}) or {}
         if not self._is_weekly(match.subcategory):
             return None
-        return self.settings.weekly_ping_role_ids.get(str(match.category_slug).lower())
+        return role_map.get(str(match.category_slug).lower())
 
     def _created_before_checkpoint(self, match: Match, checkpoint_time: datetime) -> bool:
         created_at = getattr(match, "created_at_utc", None)
@@ -165,6 +172,17 @@ class SchedulerJobs:
 
     async def _log_notice(self, message: str) -> discord.Message | None:
         return await self._safe_send(int(self.settings.lightbringer_logs_thread_id), message)
+
+    async def _send_result_to_olir(self, match: Match, race_data: dict) -> None:
+        payload = self.racetime_result_service.build_olir_result_payload(match, race_data)
+        if not payload:
+            await self._log_notice(f"Could not build O-Lir result payload for `{self._match_label(match)}`.")
+            return
+        try:
+            await self.olir_client.report_match_result(payload)
+        except Exception as exc:
+            logger.exception("Failed to report result to O-Lir for %s: %s", match.id, exc)
+            await self._log_notice(f"Failed to report result to O-Lir for `{self._match_label(match)}`: {exc}")
 
     async def _delete_discord_message(self, channel_id: str | int, message_id: str | int) -> bool:
         try:
@@ -319,7 +337,8 @@ class SchedulerJobs:
                 )
                 sent = await self._safe_dm_user(user_id, dm_text)
                 if not sent:
-                    await self._log_notice(
+                    await self._safe_send(
+                        self.settings.admin_channel_id,
                         f"Failed to DM {team_key} player <@{user_id}> for `{self._match_label(match)}`."
                     )
 
@@ -423,12 +442,68 @@ class SchedulerJobs:
 
             self.reminders.mark_sent(session, briefing_key, reminder_type)
 
+    async def _scan_speedgaming_links(self) -> None:
+        if not self.twitch_service.enabled():
+            return
+
+        now = datetime.utcnow()
+        window_start = now + timedelta(minutes=4)
+        window_end = now + timedelta(minutes=6)
+
+        with session_scope() as session:
+            stmt = select(Match).where(
+                Match.status.not_in(["complete", "cancelled"]),
+                Match.speedgaming_url.is_(None),
+                Match.start_at_utc >= window_start,
+                Match.start_at_utc <= window_end,
+            )
+            matches = list(session.execute(stmt).scalars().all())
+
+        if not matches:
+            return
+
+        try:
+            live_streams = await self.twitch_service.get_live_speedgaming_streams()
+        except Exception as exc:
+            logger.warning("Failed to scan Twitch SpeedGaming channels: %s", exc)
+            await self._log_notice(f"Failed to scan Twitch SpeedGaming channels: {exc}")
+            return
+
+        for match in matches:
+            if getattr(match, "speedgaming_url", None):
+                continue
+
+            best_stream = self.twitch_service.find_best_match(match, live_streams)
+            if best_stream is None:
+                continue
+
+            try:
+                updated = self.match_service.set_speedgaming_url(match.id, best_stream.url)
+                if not updated:
+                    continue
+
+                self.calendar_service.upsert_match_event(updated)
+                await self._upsert_discord_event(updated)
+                await self._refresh_claim_message(updated)
+
+                await self._log_notice(
+                    f"Auto-linked SpeedGaming channel for `{self._match_label(updated)}`.\n"
+                    f"Channel: {best_stream.url}\n"
+                    f"Title: {best_stream.title}"
+                )
+            except Exception as exc:
+                logger.warning("Failed to auto-link SpeedGaming URL for %s: %s", match.id, exc)
+                await self._log_notice(
+                    f"Failed to auto-link SpeedGaming URL for `{self._match_label(match)}`: {exc}"
+                )
+
     async def run(self) -> None:
         logger.info("SchedulerJobs.run tick")
         await self.open_due_rooms()
         await self.send_due_seed_prompts()
         await self.send_time_reminders()
         await self.sync_racetime_room_states()
+        await self._scan_speedgaming_links()
         await self._send_daily_tournament_briefing()
 
     async def open_due_rooms(self) -> None:
@@ -515,7 +590,7 @@ class SchedulerJobs:
                 except Exception as exc:
                     logger.exception("Failed to open room for match %s", match.id)
                     await self._log_notice(
-                        f"Failed to open room for `{self._match_label(match)}`: {exc}"
+                        f"Failed to open room for `{self._match_label(match)}`: {exc}",
                     )
 
     async def send_due_seed_prompts(self) -> None:
@@ -565,9 +640,7 @@ class SchedulerJobs:
                             self.reminders.mark_sent(session, match.id, room_update_key)
                         except Exception as exc:
                             logger.exception("Failed to update racetime room info for %s: %s", match.id, exc)
-                            await self._log_notice(
-                                f"Failed to update racetime room info for `{self._match_label(match)}`: {exc}"
-                            )
+                            await self._log_notice(f"Failed to update racetime room info for `{self._match_label(match)}`: {exc}")
 
                     if str(match.category_slug).lower() == "mpcgr" and not self._is_weekly(match.subcategory):
                         if not self.reminders.already_sent(session, match.id, cgc_password_dm_key):
@@ -576,9 +649,7 @@ class SchedulerJobs:
                                 self.reminders.mark_sent(session, match.id, cgc_password_dm_key)
                             except Exception as exc:
                                 logger.exception("Failed CGC password DMs for %s: %s", match.id, exc)
-                                await self._log_notice(
-                                    f"Failed CGC password DMs for `{self._match_label(match)}`: {exc}"
-                                )
+                                await self._log_notice(f"Failed CGC password DMs for `{self._match_label(match)}`: {exc}")
 
                     self.calendar_service.upsert_match_event(match)
                     await self._upsert_discord_event(match)
@@ -660,6 +731,7 @@ class SchedulerJobs:
                             await self._archive_terminal_match(updated, "complete")
                             await self._delete_claim_box_message(updated)
                             await self._delete_runtime_messages_for_terminal_state(session, match.id)
+                            await self._send_result_to_olir(updated, race_data)
                             logger.info("Auto-completed %s from racetime state sync", match.id)
 
                     elif remote_state == "cancelled" and current_state != "cancelled":
@@ -667,6 +739,4 @@ class SchedulerJobs:
 
                 except Exception as exc:
                     logger.exception("Failed to sync racetime state for %s: %s", match.id, exc)
-                    await self._log_notice(
-                        f"Failed to sync racetime state for `{self._match_label(match)}`: {exc}"
-                    )
+                    await self._log_notice(f"Failed to sync racetime state for `{self._match_label(match)}`: {exc}")
